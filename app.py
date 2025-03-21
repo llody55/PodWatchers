@@ -3,6 +3,8 @@ import time
 import json
 import logging
 import threading
+from minio import Minio
+from minio.error import S3Error
 from datetime import datetime
 from typing import Dict, List, Optional
 from kubernetes import client, config, watch
@@ -26,8 +28,17 @@ class AppConfig:
         self.webhook_url = os.getenv("WEBHOOK_URL", "") # 企业微信机器人Webhook地址
         self.cluster_name = os.getenv("CLUSTER_NAME", "default-cluster") # 集群名称
         self.log_lines = int(os.getenv("LOG_LINES", 20))  # 日志行数配置
+        self.log_file_lines = int(os.getenv("LOG_FILE_LINES", 500))  # 日志文件行数配置
         self.event_entries = int(os.getenv("EVENT_ENTRIES", 5))  # 事件条数配置
         self.watch_timeout = int(os.getenv("WATCH_TIMEOUT", 300))  # 命名空间超时时间配置
+
+        self.minio_enabled = os.getenv("MINIO_ENABLED", "false").lower() == "true"  # MinIO日志存储启用配置
+        self.minio_endpoint = os.getenv("MINIO_ENDPOINT", "minio:9000")  # MinIO服务器地址
+        self.minio_access_key = os.getenv("MINIO_ACCESS_KEY", "minio")  # MinIO访问密钥
+        self.minio_secret_key = os.getenv("MINIO_SECRET_KEY", "minio123")  # MinIO密钥
+        self.minio_bucket = os.getenv("MINIO_BUCKET", "k8s-logs")  # MinIO存储桶名称
+        self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"  # MinIO安全连接配置
+        self.minio_proxy_endpoint = os.getenv("MINIO_PROXY_ENDPOINT", "")  # MinIO代理服务器地址
     
     @staticmethod
     def _parse_namespaces(raw: str) -> List[str]:
@@ -129,6 +140,10 @@ def prepare_alert_data(pod: client.V1Pod) -> Optional[dict]:
         ),
         "logs": fetch_pod_logs(pod.metadata.namespace, pod.metadata.name)
     }
+    # 日志不完整时，尝试再次获取
+    if "unable to retrieve container logs" in alert_data["logs"]:
+        logger.info("Retrying to fetch logs...")
+        alert_data["logs"] = fetch_pod_logs(pod.metadata.namespace, pod.metadata.name)
     # 添加节点信息
     alert_data["node_name"] = pod.spec.node_name if pod.spec else "Unknown"
 
@@ -165,7 +180,7 @@ def fetch_pod_logs(namespace: str, name: str) -> str:
         # 按行数截断
         lines = raw_logs.split('\n')
         # logger.warning(f"历史 Raw logs: {raw_logs}")
-        return '\n'.join(lines[-CONFIG.log_lines:])
+        return '\n'.join(lines[-CONFIG.log_file_lines:])
     except ApiException as e:
         logger.error(f"Failed to get previous logs: {str(e)}")
         # 尝试获取当前日志
@@ -177,7 +192,7 @@ def fetch_pod_logs(namespace: str, name: str) -> str:
             )
             lines = raw_logs.split('\n')
             # logger.warning(f"当前 Raw logs: {raw_logs}")
-            return '\n'.join(lines[-CONFIG.log_lines:]) + "\n[Note: Previous logs unavailable, showing current logs]"
+            return '\n'.join(lines[-CONFIG.log_file_lines:]) + "\n[Note: Previous logs unavailable, showing current logs]"
         except ApiException as e2:
             logger.error(f"Failed to get current logs: {str(e2)}")
             return f"Logs unavailable: {e.reason}"
@@ -217,6 +232,65 @@ def human_readable_time(seconds: float) -> str:
     hrs, min = divmod(mins, 60)
     return f"{int(hrs)}h {int(min)}m {int(sec)}s"
 
+def save_log_to_file(logs: str, pod_name: str) -> str:
+    """将日志保存为本地文件"""
+    try:
+        log_dir = "/tmp/logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = f"{log_dir}/{pod_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}.log"
+        
+        with open(log_file, 'w') as f:
+            f.write(logs)
+        
+        return log_file
+    except Exception as e:
+        logger.error(f"Failed to save log to file: {str(e)}")
+        raise
+
+def upload_log_to_minio(log_file: str, namespace: str, pod_name: str) -> str:
+    """将日志文件上传到 MinIO 并返回下载链接"""
+    if not CONFIG.minio_enabled:
+        logger.info("MinIO upload is disabled, skipping upload.")
+        return None
+    
+    try:
+        # 初始化 MinIO 客户端
+        minio_client = Minio(
+            CONFIG.minio_endpoint,
+            access_key=CONFIG.minio_access_key,
+            secret_key=CONFIG.minio_secret_key,
+            secure=CONFIG.minio_secure
+        )
+        
+        # 生成文件夹和文件名
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        object_key = f"{CONFIG.cluster_name}/{namespace}/{pod_name}-{timestamp}.log"
+        
+        # 检查桶是否存在，如果不存在则创建
+        if not minio_client.bucket_exists(CONFIG.minio_bucket):
+            minio_client.make_bucket(CONFIG.minio_bucket)
+        
+        # 上传文件
+        minio_client.fput_object(CONFIG.minio_bucket, object_key, log_file)
+        
+        # 生成下载链接
+        if CONFIG.minio_proxy_endpoint:
+            # 使用代理后的地址
+            endpoint = CONFIG.minio_proxy_endpoint
+        else:
+            # 使用原始地址
+            endpoint = CONFIG.minio_endpoint
+        
+        # 根据 minio_secure 决定协议
+        protocol = "https" if CONFIG.minio_secure else "http"
+        return f"{protocol}://{endpoint}/{CONFIG.minio_bucket}/{object_key}"
+    except S3Error as e:
+        logger.error(f"Failed to upload log to MinIO: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during MinIO upload: {str(e)}")
+        raise
+
 def send_alert(data: dict):
     """发送告警"""
     try:
@@ -235,6 +309,12 @@ def send_alert(data: dict):
         restart_time = restart_info.get('last_restart_time')
         
         send_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 保存日志为文件
+        log_file = save_log_to_file(data['logs'], data['metadata']['name'])
+        
+        # 上传日志文件到 MinIO
+        log_url = upload_log_to_minio(log_file, data['metadata']['namespace'], data['metadata']['name'])
         
         # 构造 Markdown
         md_content = f"""
@@ -263,13 +343,15 @@ def send_alert(data: dict):
 #### 关键日志
 
 > {format_logs(data['logs'])[-CONFIG.log_lines*50:]} 
+
+> **更多日志请下载：[点击这里]({log_url})**
         """
-        logger.warning(md_content)
+        #logger.warning(md_content)
         # 检查消息长度是否超限
         if len(md_content.encode('utf-8')) > 4096:
             logger.warning("Markdown content exceeds 4096 bytes, truncating logs...")
             # 截断日志内容
-            logs = format_logs(data['logs'])
+            logs = format_logs(data['logs'])[-CONFIG.log_lines*50:]
             max_log_length = 4096 - len(md_content) + len(logs)
             truncated_logs = logs[:max_log_length] + "\n[Logs truncated due to length limit]"
             md_content = md_content.replace(logs, truncated_logs)

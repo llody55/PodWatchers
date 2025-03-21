@@ -1,9 +1,9 @@
-# Kubernetes Pod 异常重启监控告警系统
+# Kubernetes Pod 异常重启监控告警
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache](https://img.shields.io/badge/License-Apache-yellow.svg)](https://opensource.org/licenses/MIT)
 
-基于Kubernetes API开发的Pod异常重启监控系统，实时检测容器异常状态，并通过企业微信机器人发送结构化告警信息。
+基于Kubernetes API开发的Pod异常重启监控，实时检测容器异常状态，并通过企业微信机器人发送结构化告警信息。
 
 ## 功能特性
 
@@ -47,6 +47,15 @@ export LOG_LINES=20                        # 显示日志行数
 export EVENT_ENTRIES=5                     # 显示事件条数
 export IGNORE_RESTART_COUNT=1              # 重启次数阈值
 export WATCHED_NAMESPACES="default,dev"    # 监控的命名空间（空=全部）
+export LOG_FILE_LINES=500
+export WATCH_TIMEOUT=300
+export MINIO_ENABLED="true"
+export MINIO_ENDPOINT="192.168.1.236:9000"
+export MINIO_ACCESS_KEY="your-access-key"
+export MINIO_SECRET_KEY="your-secret-key"
+export MINIO_BUCKET="k8s-logs"
+export MINIO_SECURE="false"
+export MINIO_PROXY_ENDPOINT=""
 ```
 
 ### 运行监控
@@ -65,7 +74,7 @@ docker run -d \
   -e LOG_LINES=15 \
   -e EVENT_ENTRIES=3 \
   --name k8s-monitor \
-  swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.0-amd64
+  swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-amd64
 ```
 
 ## K8S运行
@@ -145,7 +154,7 @@ spec:
       serviceAccountName: podwatchers
       containers:
       - name: collector
-        image: swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.0-amd64
+        image: swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-amd64
         imagePullPolicy: Always
         env:
         - name: CLUSTER_NAME
@@ -182,10 +191,10 @@ spec:
 
 ```bash
 # adm64
-swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.0-amd64
+swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-amd64
 
 # arm64
-swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.0-arm64
+swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-arm64
 ```
 
 ## 告警示例
@@ -225,26 +234,34 @@ swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.0-arm64
 | --------------------- | ---- | --------------- | ---------------------- |
 | CLUSTER_NAME          | 建议 | default-cluster | 集群名称               |
 | WEBHOOK_URL           | 必须 | ""              | Webhook地址            |
+| MUTE_SECONDS          |      | 30              | 静默时间(秒)           |
 | IGNORE_EXIT_CODE_ZERO |      | true            | 忽略正常退出(0)        |
 | WATCHED_NAMESPACES    |      | ""              | 监控命名空间(逗号分隔) |
 | LOG_LINES             |      | 20              | 显示日志行数（新增）   |
 | EVENT_ENTRIES         |      | 5               | 显示事件条数（新增）   |
 | WEBHOOK_TIMEOUT       |      | 10              | 微信接口超时(秒)       |
 | WATCH_TIMEOUT         |      | 300             | 命名空间超时时间配置   |
+| MINIO_ENABLED         |      | false           | MinIO日志存储启用配置  |
+| MINIO_ENDPOINT        |      | minio:9000      | MinIO服务器地址        |
+| MINIO_ACCESS_KEY      |      | minio           | MinIO访问密钥          |
+| MINIO_SECRET_KEY      |      | minio123        | MinIO密钥              |
+| MINIO_BUCKET          |      | k8s-logs        | MinIO存储桶名称        |
+| MINIO_SECURE          |      | false           | MinIO安全连接配置      |
+| MINIO_PROXY_ENDPOINT  |      | ""              | MinIO代理服务器地址    |
 
 ## 注意事项
 
-1. **权限要求** ：
+1、**权限要求** ：
 
 * 需要集群范围的Pod读权限
 * 需要访问Events API的权限
 
-1. **日志截断策略** ：
+2、日志截断策略：
 
 * 仅保留最后N行（由LOG_LINES控制）
 * 日志最大长度不超过企业微信接口限制（约4096字符）
 
-1. **性能建议** ：
+3、**性能建议** ：
 
 * 生产环境建议每个集群部署单个实例
 * 监控大量命名空间时适当调高 `timeout_seconds`
