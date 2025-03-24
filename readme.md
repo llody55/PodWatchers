@@ -157,6 +157,8 @@ spec:
         image: swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-amd64
         imagePullPolicy: Always
         env:
+        - name: TZ
+          value: Asia/Shanghai
         - name: CLUSTER_NAME
           valueFrom:
             secretKeyRef:
@@ -184,7 +186,14 @@ spec:
           limits:
             cpu: 200m
             memory: 256Mi
-
+        volumeMounts:
+            - mountPath: /etc/localtime
+              name: volume-localtime
+      volumes:
+        - hostPath:
+            path: /etc/localtime
+            type: ''
+          name: volume-localtime
 ```
 
 ## 目前镜像
@@ -218,12 +227,12 @@ swr.cn-southwest-2.myhuaweicloud.com/llody/podwatchers:v1.1-arm64
 #### 终止原因
 > 容器 spring-boot：OOMKilled (Exit 137)
 
-#### 最近事件（最近3条）
+#### 最近事件（最近5条）
 × Unhealthy: Liveness probe failed
 × Killing: Container failed liveness probe
 × BackOff: Container restarting
 
-#### 关键日志（最近15行）
+#### 关键日志（最近20行）
 2024-03-18 09:12:35.894 ERROR [main] o.s.c.a.AnnotationConfigApplicationContext 
 2024-03-18 09:12:35.895  WARN [main] o.s.b.f.s.DefaultListableBeanFactory 
 ```
