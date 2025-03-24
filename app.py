@@ -320,28 +320,26 @@ def send_alert(data: dict):
         md_content = f"""
 ### 🚨 Pod异常重启告警 - {CONFIG.cluster_name}
 
-#### 基本信息
-> 集群：<font color="warning">{CONFIG.cluster_name}</font>
-> 命名空间：<font color="comment">{pod['namespace']}</font>
-> Pod名称: <font color="warning">{pod['name']}</font>
-> 运行节点：<font color="comment">{node_name}</font>
-> 重启时间：<font color="warning">{restart_time}</font>
-> 发送时间：<font color="comment">{send_time}</font>
+####  基本信息
+> **集群**: **{CONFIG.cluster_name}**
+> **命名空间**: `{pod['namespace']}`
+> **Pod名称**: `{pod['name']}`
+> **运行节点**: {node_name}
+> **重启时间**: `{restart_time}`
+> **发送时间**: {send_time}
 
 #### 异常状态
->  重启次数：<font color="comment">{data['restart_info']['count'] or 'Unknown'}</font>
->  最后退出码：<font color="comment">{data['restart_info']['exit_code'] or 'Unknown'}</font>
->  最后容器：<font color="comment">{data['restart_info']['reasons'][0]['container'] or 'Unknown'}</font>
+> **重启次数**: `{data['restart_info']['count'] or 'Unknown'}`
+> **最后退出码**: {data['restart_info']['exit_code'] or 'Unknown'}
+> **最后容器**: {data['restart_info']['reasons'][0]['container'] or 'Unknown'}
 
 #### 终止原因
-
-> {format_reasons(data['restart_info']['reasons'])} 
+> `{format_reasons(data['restart_info']['reasons'])}`
 
 #### 最近事件
-> {format_events(data['events'])} 
+> {format_events(data['events'])}
 
 #### 关键日志
-
 > {format_logs(data['logs'])[-CONFIG.log_lines*50:]} 
 
 > **更多日志请下载：[点击这里]({log_url})**
